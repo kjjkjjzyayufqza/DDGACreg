@@ -1,0 +1,32 @@
+# Build outputs
+build/
+out/
+bin/
+obj/
+.vs/
+cmake-build-*/
+CMakeUserPresets.json
+
+# Compiled artifacts and logs
+*.user
+*.zip
+*.dll
+*.exe
+*.pdb
+*.log
+*.obj
+*.ilk
+*.exp
+*.lib
+
+# Local reference clone of upstream DDGUltrawide (not our tree)
+_upstream/
+
+# Runtime data created by the content server
+server/data/*.sqlite
+server/data/*.sqlite-journal
+server/data/*.db
+
+# IDE
+.idea/
+*.code-workspace
