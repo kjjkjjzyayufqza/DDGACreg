@@ -24,12 +24,16 @@ jobs:
             ('(2019) ' + '(Japan)')
           )
           $pattern = ($needles -join '|')
+          # git grep exits 1 when nothing matches. PowerShell 7 on the runner
+          # otherwise turns that into a failed step before this script can read it.
+          $PSNativeCommandUseErrorActionPreference = $false
           git grep -n -I -E $pattern -- . ':(exclude)third_party' ':(exclude)server/third_party'
-          if ($LASTEXITCODE -eq 0) {
+          $code = $LASTEXITCODE
+          if ($code -eq 0) {
             throw 'Tracked files contain a machine-local path.'
           }
-          if ($LASTEXITCODE -ne 1) {
-            throw 'git grep failed while scanning for machine-local paths.'
+          if ($code -ne 1) {
+            throw "git grep failed while scanning for machine-local paths (exit $code)."
           }
 
       - name: Configure
