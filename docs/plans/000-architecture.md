@@ -15,9 +15,8 @@ The DLL is not an ASI plugin and is not loaded by Ultimate ASI Loader. It is a
 [DDGUltrawide](https://github.com/percentcer/DDGUltrawide) and the proxy-DLL
 mods that sit next to a game executable. MinHook lives in `third_party/minhook`.
 
-Game binaries used for research:
-
-`E:\Densha de Go!!\Densha de Go!! (5.80.02) (2019) (Japan) [Taito Type X4] [TP]\TG4AC\Binaries\Win64`
+Game binaries used for research live in a local `TG4AC\Binaries\Win64` folder
+next to `TG4AC-Win64-Shipping.exe`. Do not commit that path.
 
 ## Load path
 

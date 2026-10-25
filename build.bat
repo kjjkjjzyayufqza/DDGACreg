@@ -2,16 +2,24 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-rem Delayed expansion stays off. The game path contains "!!", which cmd would
+rem Delayed expansion stays off. A game path may contain "!!", which cmd would
 rem erase if delayed expansion were enabled. Parentheses in that path are also
 rem left outside of parenthesized IF blocks so they are not parsed as block ends.
+rem
+rem The install folder is never stored in this script. Optional sources, in order:
+rem   build.bat release "<TG4AC\Binaries\Win64>"
+rem   DDGAC_GAME_DIR
+rem   build.local.bat in this directory (gitignored; may set DEST)
 
 if /I "%~1"=="release" goto :config_release
 if /I "%~1"=="debug" goto :config_debug
 
-echo Usage: build.bat release ^| debug
-echo   release   Build Release version.dll and copy it next to the game EXE.
-echo   debug     Build Debug version.dll and version.pdb into the same folder.
+echo Usage: build.bat release ^| debug [game_dir]
+echo   release    Build Release version.dll.
+echo   debug      Build Debug version.dll and version.pdb.
+echo   game_dir   Optional folder that contains TG4AC-Win64-Shipping.exe.
+echo              When omitted, DDGAC_GAME_DIR or build.local.bat is used.
+echo              With none of those, the DLL stays under build\ and is not copied.
 exit /b 1
 
 :config_release
@@ -23,15 +31,20 @@ set "CONFIG=Debug"
 goto :build
 
 :build
-set "DEST=E:\Densha de Go!!\Densha de Go!! (5.80.02) (2019) (Japan) [Taito Type X4] [TP]\TG4AC\Binaries\Win64"
-set "CMAKE=C:\Program Files\CMake\bin\cmake.exe"
-if not exist "%CMAKE%" goto :missing_cmake
+if exist "%~dp0build.local.bat" call "%~dp0build.local.bat"
+if not "%~2"=="" set "DEST=%~2"
+if not defined DEST set "DEST=%DDGAC_GAME_DIR%"
+
+where cmake >nul 2>&1
+if errorlevel 1 goto :missing_cmake
 
 echo Building %CONFIG% version.dll
-"%CMAKE%" -S "%CD%" -B "%CD%\build" -A x64
+cmake -S "%CD%" -B "%CD%\build" -A x64
 if errorlevel 1 exit /b 1
-"%CMAKE%" --build "%CD%\build" --config %CONFIG% --target ddgac
+cmake --build "%CD%\build" --config %CONFIG% --target ddgac
 if errorlevel 1 exit /b 1
+
+if not defined DEST goto :built_only
 
 if not exist "%DEST%\TG4AC-Win64-Shipping.exe" goto :missing_game
 
@@ -53,8 +66,14 @@ echo Copied %CONFIG% version.dll to:
 echo   %DEST%
 exit /b 0
 
+:built_only
+echo Built %CONFIG% version.dll:
+echo   %CD%\build\dll\%CONFIG%\version.dll
+echo Pass the game Binaries\Win64 folder, or set DDGAC_GAME_DIR, to copy it.
+exit /b 0
+
 :missing_cmake
-echo cmake.exe was not found. Install CMake and Visual Studio 2022 x64.
+echo cmake.exe was not found on PATH. Install CMake and Visual Studio 2022 x64.
 exit /b 1
 
 :missing_game

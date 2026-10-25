@@ -1,6 +1,11 @@
 # DDGACreg
 
+[![Build](https://github.com/kjjkjjzyayufqza/DDGACreg/actions/workflows/build.yml/badge.svg)](https://github.com/kjjkjjzyayufqza/DDGACreg/actions/workflows/build.yml)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?style=flat&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/kjjkjj)
+
 DDGACreg is a hook for Densha de Go!! AC (TG4AC 5.80.02). It loads as `version.dll` next to the game.
+
+<a href="https://buymeacoffee.com/kjjkjj"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="40"></a>
 
 ## Credit
 
@@ -16,17 +21,71 @@ The ultrawide display port is from [DDGUltrawide](https://github.com/percentcer/
 | `server/` | Localhost content program (`ddgac-content.exe`) and its SQLite database |
 | `config.ini` | Settings copied next to the game. The content server reads the same file |
 | `third_party/minhook/` | Vendored MinHook |
-| `build.bat` | Builds `version.dll` and copies it next to the game |
+| `build.bat` | Builds `version.dll` and, when a game folder is given, copies it there |
+| `.github/workflows/build.yml` | Windows CI: configure, build Release, upload the DLL and server |
 
-## Install
+## Run locally
 
-Copy the Release `version.dll` and `config.ini` into `TG4AC\Binaries\Win64`, next to `TG4AC-Win64-Shipping.exe` (version 5.80.02). Do not replace the game executable. Remove `version.dll` to uninstall.
+Windows x64, Visual Studio 2022 with the Desktop development with C++ workload, CMake 3.24 or newer, and the Windows SDK (`fxc.exe` embeds the display shaders). `cmake` must be on `PATH`.
 
-Start `ddgac-content.exe` before the game for cards, players, and leaderboards. A build from this tree listens on `127.0.0.1:8750` and stores `server/data/content.sqlite`. The DLL does not open that database.
+### 1. Build
+
+From the repository root:
+
+```bat
+cmake -S . -B build -A x64
+cmake --build build --config Release
+```
+
+`build.bat release` builds only the Release DLL. `build.bat debug` builds the Debug DLL and its PDB.
+
+Outputs:
+
+- `build\dll\Release\version.dll`
+- `build\server\Release\ddgac-content.exe`
+
+GitHub Actions runs the same Release build on `windows-2022` and uploads those two binaries plus `config.ini` as the `ddgac-release` artifact.
+
+### 2. Install the hook
+
+Copy `version.dll` and `config.ini` into the folder that contains `TG4AC-Win64-Shipping.exe`:
+
+```text
+TG4AC\Binaries\Win64
+```
+
+Do not replace the game executable. Remove `version.dll` to uninstall.
+
+To copy during the build, pass that folder, or set `DDGAC_GAME_DIR` to it:
+
+```bat
+build.bat release "C:\path\to\TG4AC\Binaries\Win64"
+```
+
+```bat
+set DDGAC_GAME_DIR=C:\path\to\TG4AC\Binaries\Win64
+build.bat release
+```
+
+A gitignored `build.local.bat` in the repository root may `set "DEST=..."` to the same folder. That file is the place for a machine path. Do not commit it.
+
+`build.bat` also deletes `winmm.dll` and a `scripts` folder in the game directory (an old Ultimate ASI Loader). It leaves `dwmapi.dll` (UE4SS) in place. With no game folder set, it builds and does not copy.
+
+### 3. Start the content server
+
+Start this before the game, and leave the window open:
+
+```bat
+build\server\Release\ddgac-content.exe
+```
+
+The server walks upward from its own folder until it finds `config.ini`. It listens on `127.0.0.1:8750` (the port in `[Content] BaseUrl`) and stores `server\data\content.sqlite` when launched from a build tree. It refuses any host that is not loopback. The DLL does not open that database.
+
+### 4. Launch the game
+
+Start `TG4AC-Win64-Shipping.exe` (version 5.80.02). The hook opens a console titled `DDGACreg` and writes `DDGACreg.log` beside the DLL. Closing the console does not exit the game.
 
 The DLL runs the cabinet's NESYS service inside the game and sends the game's HTTP and card requests to that server. On the mode select screen the NESiCA mode button stays grey while the game waits for a card: press P to tap it. The card is selected on the content server and the button lights up.
-
-The hook opens a console titled `DDGACreg` and writes `DDGACreg.log` beside the DLL. Closing the console does not exit the game.
 
 ## config.ini
 
@@ -43,19 +102,3 @@ The hook opens a console titled `DDGACreg` and writes `DDGACreg.log` beside the 
 - `[Stream] Enabled` — raises the cabinet's per-frame load and streaming caps, and turns off the game's extra DWM vsync wait. `Enabled=0` leaves those caps alone.
 - `[Card]` — `Key` (default `P`) taps the card while the game is reading; a press up to 3 seconds earlier also counts. `Id` is the 16-character card and must start with `707` or `709`.
 - `[Layout]`, `[Source]`, `[Touch]`, `[Hotkeys]`, and `[TouchPanelWindow]` are DDGUltrawide settings. Comments in `config.ini` describe them.
-
-## Build
-
-Visual Studio 2022 x64, CMake 3.24+, Windows SDK.
-
-```bat
-cmake -S . -B build -A x64
-cmake --build build --config Release
-```
-
-Outputs:
-
-- `build/dll/Release/version.dll`
-- `build/server/Release/ddgac-content.exe`
-
-`build.bat release` builds the Release DLL and copies `version.dll` next to the game executable. It does not build or copy the content server. `build.bat debug` does the same for a Debug DLL and its PDB.

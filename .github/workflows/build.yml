@@ -1,0 +1,49 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reject machine-local paths
+        shell: pwsh
+        run: |
+          $needles = @(
+            ('C:\' + 'Users'),
+            ('C:/' + 'Users'),
+            ('/Use' + 'rs/'),
+            ('/ho' + 'me/'),
+            ('App' + 'Data'),
+            ('(2019) ' + '(Japan)')
+          )
+          $pattern = ($needles -join '|')
+          git grep -n -I -E $pattern -- . ':(exclude)third_party' ':(exclude)server/third_party'
+          if ($LASTEXITCODE -eq 0) {
+            throw 'Tracked files contain a machine-local path.'
+          }
+          if ($LASTEXITCODE -ne 1) {
+            throw 'git grep failed while scanning for machine-local paths.'
+          }
+
+      - name: Configure
+        run: cmake -S . -B build -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --target ddgac ddgac-content
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: ddgac-release
+          path: |
+            build/dll/Release/version.dll
+            build/server/Release/ddgac-content.exe
+            config.ini
+          if-no-files-found: error

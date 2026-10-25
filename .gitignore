@@ -30,3 +30,13 @@ server/data/*.db
 # IDE
 .idea/
 *.code-workspace
+
+# Machine-local install path. build.bat calls this when it exists.
+build.local.bat
+
+# Local extracts and bytecode. Not part of the source tree.
+__pycache__/
+*.pyc
+*.xlsx
+*.i64
+*.idb
