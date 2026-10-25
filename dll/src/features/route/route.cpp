@@ -26,13 +26,20 @@
 //   with bMakeVisibleAfterLoad false keeps a preloaded neighbor hidden.
 // LevelLoadStart (sub_1401FDA20) is the queue entry.
 //
-// Once an InGame world is up, every name on UWorld::StreamingLevels (+136/+144)
-// is loaded and shown, and the YMTc packages are queued when the world is the
-// Yamanote loop. From then on releases are refused, an unload is redirected to
+// The old Yamanote missions (HRJ, SBY, EBS, and the rest) pass those short
+// station codes to LevelLoadStart before UWorld::StreamingLevels can be read.
+// The first such code queues the old-line packages selected by [Route] Load.
+// The YMTc loop still waits until its world lists streaming levels, then the
+// same selection is loaded and shown and the matching YMTc packages are queued.
+// Load=all keeps every streaming level. Load=scenery keeps buildings, ground,
+// rails, facilities, and track sections, and leaves plants, crowds, gimmicks,
+// cameras, stages, and volumes with the mission. From then on a selected
+// release is refused, an unload of a selected level is redirected to
 // NAME_None (its latent action finishes at once and nothing unloads), and a
-// hidden preload is made visible. Weather and section lighting levels
-// ("Lighting" in the name) stay under the game's control so only the mission's
-// weather is shown. Loading OutGame resets this for the next mission.
+// hidden preload of a selected level is made visible. Weather and section
+// lighting levels ("Lighting" in the name) stay under the game's control so
+// only the mission's weather is shown. Loading OutGame resets this for the
+// next mission.
 // Image base in IDA is 0x140000000.
 
 namespace {
@@ -49,6 +56,21 @@ constexpr unsigned int kWideFreeRva = 0x489F70;          // sub_140489F70
 constexpr int kStreamingData = 136;
 constexpr int kStreamingCount = 144;
 constexpr int kLevelNameOffset = 80;
+constexpr int kStreamFlags = 0xB0;
+constexpr unsigned int kLoadAndShow = 0x60;
+constexpr unsigned int kGroupStation = 1u << 0;
+constexpr unsigned int kGroupFacility = 1u << 1;
+constexpr unsigned int kGroupGround = 1u << 2;
+constexpr unsigned int kGroupLine = 1u << 3;
+constexpr unsigned int kGroupRail = 1u << 4;
+constexpr unsigned int kGroupSection = 1u << 5;
+constexpr unsigned int kGroupPlant = 1u << 6;
+constexpr unsigned int kGroupLife = 1u << 7;
+constexpr unsigned int kGroupGimmick = 1u << 8;
+constexpr unsigned int kLoadScenery =
+    kGroupStation | kGroupFacility | kGroupGround | kGroupLine | kGroupRail | kGroupSection;
+constexpr unsigned int kLoadAll = ~0u;
+constexpr unsigned int kGWorldRva = 0x2FFDDC8;
 constexpr int kMaxStreaming = 512;
 
 constexpr int kFindNameAdd = 1;
@@ -92,6 +114,7 @@ struct LatentAction {
 };
 
 #include "route_packages.inc"
+#include "route_ymt_packages.inc"
 
 LevelLoadStartFn g_originalLoad = nullptr;
 LevelReleaseFn g_originalRelease = nullptr;
@@ -107,11 +130,18 @@ void* g_manager = nullptr;
 
 // 0 = not expanded, 1 = expanding, 2 = the line is loaded and kept.
 std::atomic<int> g_expandState{0};
+std::atomic<int> g_oldLine{0};
+unsigned int g_loadMask = kLoadScenery;
+char g_loadLabel[96] = "scenery";
 std::atomic<int> g_loggedRelease{0};
 std::atomic<int> g_loggedUnload{0};
 std::atomic<int> g_loggedVisible{0};
 std::atomic<int> g_loggedNames{0};
 std::atomic<int> g_loggedMiss{0};
+std::uint64_t g_shownNames[kMaxStreaming]{};
+int g_shownCount = 0;
+int g_listLogged = 0;
+int g_emptyLogged = 0;
 
 bool HasPrefix(const unsigned char* bytes, const unsigned char* prefix, std::size_t count)
 {
@@ -194,14 +224,38 @@ bool LeafIsYamanotePackage(const wchar_t* text)
     return false;
 }
 
-// True for a full YMTc path, an old /YMT/ path, or a short station code such
-// as SINc that the mission passes instead of a package path.
+bool LeafIsOldYamanotePackage(const wchar_t* text)
+{
+    const wchar_t* leaf = Leaf(text);
+    if (leaf[0] == L'\0')
+        return false;
+    for (int i = 0; i < kOldPackageCount; ++i)
+    {
+        if (wcscmp(leaf, Leaf(kOldPackages[i])) == 0)
+            return true;
+    }
+    return false;
+}
+
+// The 5.80 missions that still drive the partial YMT slice pass a short
+// station code (HRJ, SBY) or a /Maps/InGame/YMT/ path. YMTc contains the
+// letters YMT, so that loop is excluded here.
+bool TextIsOldYamanote(const std::wstring& text)
+{
+    if (text.empty() || text.find(L"YMTc") != std::wstring::npos)
+        return false;
+    if (text.find(L"/Maps/InGame/YMT/") != std::wstring::npos)
+        return true;
+    return LeafIsOldYamanotePackage(text.c_str());
+}
+
+// True for a YMTc path or a short station code such as SINc. The older /YMT/
+// slice is a different line and is not matched here.
 bool TextIsYamanote(const std::wstring& text)
 {
-    if (text.empty())
+    if (text.empty() || TextIsOldYamanote(text))
         return false;
-    if (text.find(L"YMTc") != std::wstring::npos || text.find(L"/YMT/") != std::wstring::npos ||
-        text.find(L"YMT_") != std::wstring::npos)
+    if (text.find(L"YMTc") != std::wstring::npos)
         return true;
     return LeafIsYamanotePackage(text.c_str());
 }
@@ -209,7 +263,7 @@ bool TextIsYamanote(const std::wstring& text)
 // A driving world lists its stations and sections under /Maps/InGame/.
 bool TextIsInGame(const std::wstring& text)
 {
-    return ContainsNoCase(text, L"/Maps/InGame/") || TextIsYamanote(text);
+    return ContainsNoCase(text, L"/Maps/InGame/") || TextIsYamanote(text) || TextIsOldYamanote(text);
 }
 
 bool TextIsLighting(const std::wstring& text)
@@ -222,11 +276,19 @@ bool TextIsOutGame(const std::wstring& text)
     return ContainsNoCase(text, L"OutGame");
 }
 
+bool TextIsSelectedDetail(const std::wstring& text);
+
 // Names the route keeps loaded and visible once the line is expanded.
+// Load=all keeps every non-lighting name. A narrower Load keeps only the
+// groups named in config, so plants and crowds can still unload.
 bool ShouldKeep(const std::wstring& text)
 {
-    return g_expandState.load(std::memory_order_acquire) == 2 && !text.empty() && !TextIsLighting(text)
-        && !TextIsOutGame(text);
+    if (g_expandState.load(std::memory_order_acquire) != 2 || text.empty() || TextIsLighting(text)
+        || TextIsOutGame(text))
+        return false;
+    if (g_oldLine.load(std::memory_order_acquire) == 1 && g_loadMask != kLoadAll)
+        return TextIsSelectedDetail(text);
+    return true;
 }
 
 void LogSeenName(const char* prefix, const std::wstring& text)
@@ -243,6 +305,8 @@ void QueueYamanotePackages(void* manager)
     int queued = 0;
     for (int i = 0; i < kPackageCount; ++i)
     {
+        if (g_loadMask != kLoadAll && !TextIsSelectedDetail(kPackages[i]))
+            continue;
         FName made{};
         g_makeName(&made, kPackages[i], kFindNameAdd);
         if (made.comparisonIndex == 0 && made.number == 0)
@@ -256,6 +320,57 @@ void QueueYamanotePackages(void* manager)
         ++queued;
     }
     LOG("Route: queued %d Yamanote packages", queued);
+}
+
+// LevelLoadStart on this line is given the short asset name (HRJ, HRJ_Stage),
+// which is the form the mission itself uses. Full paths are what LoadStreamLevel
+// receives, and that list was still empty when these missions loaded.
+void QueueOldYamanote(void* manager)
+{
+    if (manager == nullptr || g_originalLoad == nullptr || g_makeName == nullptr)
+        return;
+
+    int queued = 0;
+    for (int i = 0; i < kOldPackageCount; ++i)
+    {
+        if (!TextIsSelectedDetail(kOldPackages[i]))
+            continue;
+        const wchar_t* leaf = Leaf(kOldPackages[i]);
+        FName made{};
+        g_makeName(&made, leaf, kFindNameAdd);
+        if (made.comparisonIndex == 0 && made.number == 0)
+        {
+            LogWide("Route: name failed", leaf);
+            continue;
+        }
+        g_originalLoad(manager, &made, 0);
+        // The station code loads the shell. The same package path is what the
+        // streaming level is registered under, so queue that too.
+        if (std::wcscmp(leaf, kOldPackages[i]) != 0)
+        {
+            FName pathName{};
+            g_makeName(&pathName, kOldPackages[i], kFindNameAdd);
+            if (pathName.comparisonIndex != 0 || pathName.number != 0)
+                g_originalLoad(manager, &pathName, 0);
+        }
+        ++queued;
+    }
+    LOG("Route: queued %d old Yamanote packages", queued);
+}
+
+// Marks the line kept before any package is queued, so a nested release cannot
+// drop a station while the queue is still running. Returns false if another
+// caller already expanded this mission.
+bool ClaimOldYamanote(void* manager)
+{
+    if (manager == nullptr)
+        return false;
+    int expected = 0;
+    if (!g_expandState.compare_exchange_strong(expected, 2, std::memory_order_acq_rel))
+        return false;
+    g_oldLine.store(1, std::memory_order_release);
+    QueueOldYamanote(manager);
+    return true;
 }
 
 bool PointerInGame(const void* pointer)
@@ -353,7 +468,8 @@ void ShowListed(void* owner, const NameList& list, bool skipOldYamanote)
     for (int i = 0; i < list.count; ++i)
     {
         const std::wstring text = NameText(list.names[i]);
-        if (TextIsLighting(text) || (skipOldYamanote && text.find(L"/YMT/") != std::wstring::npos))
+        const bool filtered = g_loadMask != kLoadAll && !TextIsSelectedDetail(text);
+        if (TextIsLighting(text) || filtered || (skipOldYamanote && text.find(L"/YMT/") != std::wstring::npos))
         {
             ++skipped;
             continue;
@@ -395,6 +511,188 @@ bool TryExpand(void* context)
     return true;
 }
 
+bool TextIsCoarse(const std::wstring& text)
+{
+    return TextIsLighting(text) || ContainsNoCase(text, L"RefCap") || ContainsNoCase(text, L"LS_")
+        || ContainsNoCase(text, L"Snow") || ContainsNoCase(text, L"Rain");
+}
+
+bool LeafEnds(const wchar_t* leaf, const wchar_t* suffix)
+{
+    const std::size_t name = leaf == nullptr ? 0 : wcslen(leaf);
+    const std::size_t tail = wcslen(suffix);
+    if (name < tail)
+        return false;
+    return _wcsnicmp(leaf + (name - tail), suffix, tail) == 0;
+}
+
+// 0 means the name is not one of the selectable groups (camera, stage, volume,
+// weather). Load=all still takes those through TextIsSelectedDetail.
+unsigned int GroupOf(const std::wstring& text)
+{
+    const wchar_t* leaf = Leaf(text.c_str());
+    if (ContainsNoCase(text, L"Enlivening"))
+        return kGroupLife;
+    if (ContainsNoCase(text, L"Gimmick"))
+        return kGroupGimmick;
+    if (ContainsNoCase(text, L"Camera") || ContainsNoCase(text, L"Stage") || ContainsNoCase(text, L"Volume")
+        || ContainsNoCase(text, L"Snow") || ContainsNoCase(text, L"StaticLight") || ContainsNoCase(text, L"Test")
+        || ContainsNoCase(text, L"HLOD") || ContainsNoCase(text, L"RefCap") || ContainsNoCase(text, L"Lighting"))
+        return 0;
+    if (ContainsNoCase(text, L"/Plant/") || LeafEnds(leaf, L"_P"))
+        return kGroupPlant;
+    if (ContainsNoCase(text, L"/Rail/") || LeafEnds(leaf, L"_R"))
+        return kGroupRail;
+    if (ContainsNoCase(text, L"/Ground/") || LeafEnds(leaf, L"_G"))
+        return kGroupGround;
+    if (ContainsNoCase(text, L"/Facility/") || LeafEnds(leaf, L"_F"))
+        return kGroupFacility;
+    if (ContainsNoCase(text, L"/Line/") || LeafEnds(leaf, L"_L"))
+        return kGroupLine;
+    if (ContainsNoCase(text, L"/Building/") || ContainsNoCase(text, L"/Station/") || LeafEnds(leaf, L"_S"))
+        return kGroupStation;
+    if (LeafEnds(leaf, L"_A") || LeafEnds(leaf, L"_B") || LeafEnds(leaf, L"_C") || wcschr(leaf, L'_') == nullptr)
+        return kGroupSection;
+    return 0;
+}
+
+bool TextIsSelectedDetail(const std::wstring& text)
+{
+    if (text.empty() || TextIsCoarse(text))
+        return false;
+    if (g_loadMask == kLoadAll)
+        return true;
+    const unsigned int group = GroupOf(text);
+    return group != 0 && (g_loadMask & group) != 0;
+}
+
+void* ReadGWorld()
+{
+    if (g_game == nullptr)
+        return nullptr;
+    __try
+    {
+        return *reinterpret_cast<void**>(g_game + kGWorldRva);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return nullptr;
+    }
+}
+
+struct LevelRef
+{
+    unsigned char* level;
+    std::uint64_t name;
+};
+
+int CollectStreaming(void* world, LevelRef* out, int cap, int* listed)
+{
+    *listed = 0;
+    if (world == nullptr || out == nullptr || cap < 1)
+        return 0;
+    __try
+    {
+        auto* data = *reinterpret_cast<unsigned char**>(static_cast<unsigned char*>(world) + kStreamingData);
+        const int count = *reinterpret_cast<int*>(static_cast<unsigned char*>(world) + kStreamingCount);
+        if (data == nullptr || count < 1 || count > 2000)
+            return 0;
+        *listed = count;
+        const int limit = count < cap ? count : cap;
+        int kept = 0;
+        for (int i = 0; i < limit; ++i)
+        {
+            auto* level = *reinterpret_cast<unsigned char**>(data + static_cast<std::size_t>(i) * sizeof(void*));
+            if (level == nullptr)
+                continue;
+            auto** vtable = *reinterpret_cast<void***>(level);
+            if (!PointerInGame(vtable))
+                continue;
+            std::uint64_t bits = 0;
+            std::memcpy(&bits, level + kLevelNameOffset, sizeof(bits));
+            out[kept].level = level;
+            out[kept].name = bits;
+            ++kept;
+        }
+        return kept;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+bool MarkLoadedAndVisible(unsigned char* level)
+{
+    __try
+    {
+        auto* flags = reinterpret_cast<unsigned int*>(level + kStreamFlags);
+        const unsigned int next = (*flags | kLoadAndShow) & ~0x100u;
+        if (*flags == next)
+            return false;
+        *flags = next;
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+// bShouldBeLoaded is bit 5 and bShouldBeVisible is bit 6 of ULevelStreaming+0xB0.
+// The distant building shell is the HLOD of a sublevel whose bits are still clear.
+// The rail mesh sits in the station level that LevelLoadStart already queued.
+int ForceListedDetail(void* world, int* listed)
+{
+    static LevelRef levels[kMaxStreaming];
+    const int kept = CollectStreaming(world, levels, kMaxStreaming, listed);
+    int forced = 0;
+    for (int i = 0; i < kept; ++i)
+    {
+        if (!TextIsSelectedDetail(NameText(levels[i].name)))
+            continue;
+        if (MarkLoadedAndVisible(levels[i].level))
+            ++forced;
+    }
+    return forced;
+}
+
+// The manager's GetWorld did not list these sublevels. GWorld does.
+void ShowManagerStreaming(void* streamContext)
+{
+    if (g_oldLine.load(std::memory_order_acquire) != 1)
+        return;
+
+    void* world = ReadGWorld();
+    int listed = 0;
+    int forced = ForceListedDetail(world, &listed);
+    if (listed == 0)
+    {
+        void* other = WorldOf(g_manager);
+        if (other == nullptr)
+            other = WorldOf(streamContext);
+        forced = ForceListedDetail(other, &listed);
+    }
+    if (listed == 0)
+    {
+        if (g_emptyLogged == 0)
+        {
+            g_emptyLogged = 1;
+            LOG("Route: streaming list is empty");
+        }
+        return;
+    }
+    if (g_listLogged == 0)
+    {
+        g_listLogged = 1;
+        LOG("Route: streaming list has %d names, forced %d selected levels to load", listed, forced);
+    }
+    else if (forced > 0)
+    {
+        LOG("Route: forced %d more streaming levels (%d listed)", forced, listed);
+    }
+}
+
 void ResetForOutGame(const std::wstring& text)
 {
     if (!TextIsOutGame(text))
@@ -403,6 +701,10 @@ void ResetForOutGame(const std::wstring& text)
     if (g_expandState.compare_exchange_strong(expanded, 0, std::memory_order_acq_rel))
     {
         g_loggedMiss.store(0, std::memory_order_relaxed);
+        g_oldLine.store(0, std::memory_order_relaxed);
+        g_shownCount = 0;
+        g_listLogged = 0;
+        g_emptyLogged = 0;
         LOG("Route: OutGame loading, the next mission expands its own line");
     }
 }
@@ -418,6 +720,8 @@ std::int64_t __fastcall LoadStreamDetour(
         makeVisible = 1;
     }
     const std::int64_t result = g_originalLoadStream(context, name, makeVisible, blockOnLoad, latent);
+    if (g_oldLine.load(std::memory_order_acquire) == 1)
+        ShowManagerStreaming(context);
     if (g_expandState.load(std::memory_order_acquire) != 0 || !TextIsInGame(text))
         return result;
 
@@ -450,6 +754,15 @@ std::int64_t __fastcall LevelLoadStartDetour(void* manager, FName* name, int pre
     if (g_expandState.load(std::memory_order_acquire) != 0)
         return result;
 
+    // Old Yamanote never fills StreamingLevels before this call. Queue from the
+    // station code itself; the world-list path below stays for YMTc and others.
+    if (TextIsOldYamanote(text))
+    {
+        if (ClaimOldYamanote(manager))
+            LogWide("Route: old Yamanote line requested from", text.c_str());
+        return result;
+    }
+
     if (!TryExpand(manager) && TextIsInGame(text) && g_loggedMiss.exchange(1, std::memory_order_acq_rel) == 0)
         LOG("Route: InGame name seen, streaming list not ready");
     return result;
@@ -481,6 +794,92 @@ bool __fastcall LevelReleaseStartDetour(void* manager, FName* name)
     return g_originalReleaseStart(manager, name);
 }
 
+std::string LowerAscii(std::string text)
+{
+    for (char& c : text)
+    {
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<char>(c - 'A' + 'a');
+    }
+    return text;
+}
+
+unsigned int MaskOfLoadToken(const std::string& token)
+{
+    if (token == "all" || token == "full")
+        return kLoadAll;
+    if (token == "scenery" || token == "scene")
+        return kLoadScenery;
+    if (token == "station" || token == "building" || token == "buildings")
+        return kGroupStation;
+    if (token == "facility")
+        return kGroupFacility;
+    if (token == "ground")
+        return kGroupGround;
+    if (token == "line")
+        return kGroupLine;
+    if (token == "rail" || token == "rails")
+        return kGroupRail;
+    if (token == "section" || token == "sections")
+        return kGroupSection;
+    if (token == "plant" || token == "plants" || token == "tree" || token == "trees")
+        return kGroupPlant;
+    if (token == "life" || token == "crowd" || token == "crowds" || token == "enlivening")
+        return kGroupLife;
+    if (token == "gimmick" || token == "gimmicks")
+        return kGroupGimmick;
+    return 0;
+}
+
+void ApplyLoadValue(const std::string& value)
+{
+    unsigned int mask = 0;
+    bool any = false;
+    bool unknown = false;
+    std::size_t i = 0;
+    while (i < value.size())
+    {
+        while (i < value.size() && (value[i] == ' ' || value[i] == '\t' || value[i] == ',' || value[i] == '|'))
+            ++i;
+        std::size_t end = i;
+        while (end < value.size() && value[end] != ',' && value[end] != '|' && value[end] != ' ' && value[end] != '\t')
+            ++end;
+        if (end == i)
+            break;
+        const std::string token = LowerAscii(value.substr(i, end - i));
+        i = end;
+        const unsigned int bit = MaskOfLoadToken(token);
+        if (bit == 0)
+        {
+            unknown = true;
+            LOG("WARN: Route Load token \"%s\" is not a group", token.c_str());
+            continue;
+        }
+        any = true;
+        if (bit == kLoadAll)
+        {
+            mask = kLoadAll;
+            break;
+        }
+        mask |= bit;
+    }
+    if (!any)
+    {
+        g_loadMask = kLoadScenery;
+        std::snprintf(g_loadLabel, sizeof(g_loadLabel), "scenery");
+        if (unknown)
+            LOG("WARN: Route Load fell back to scenery");
+        return;
+    }
+    g_loadMask = mask;
+    if (mask == kLoadAll)
+        std::snprintf(g_loadLabel, sizeof(g_loadLabel), "all");
+    else if (mask == kLoadScenery)
+        std::snprintf(g_loadLabel, sizeof(g_loadLabel), "scenery");
+    else
+        std::snprintf(g_loadLabel, sizeof(g_loadLabel), "custom");
+}
+
 bool ReadRouteEnabled(const wchar_t* moduleDir)
 {
     if (moduleDir == nullptr || moduleDir[0] == L'\0')
@@ -501,6 +900,8 @@ bool ReadRouteEnabled(const wchar_t* moduleDir)
         bytes.erase(0, 3);
 
     bool inRoute = false;
+    bool enabled = false;
+    bool sawEnabled = false;
     std::size_t i = 0;
     while (i < bytes.size())
     {
@@ -530,16 +931,22 @@ bool ReadRouteEnabled(const wchar_t* moduleDir)
         std::string key = line.substr(0, eq);
         while (!key.empty() && (key.back() == ' ' || key.back() == '\t'))
             key.pop_back();
-        if (key != "Enabled")
-            continue;
         std::string value = line.substr(eq + 1);
         std::size_t v = 0;
         while (v < value.size() && (value[v] == ' ' || value[v] == '\t'))
             ++v;
         value = value.substr(v);
-        return value == "1";
+        if (key == "Enabled")
+        {
+            sawEnabled = true;
+            enabled = value == "1";
+        }
+        else if (key == "Load")
+        {
+            ApplyLoadValue(value);
+        }
     }
-    return false;
+    return sawEnabled && enabled;
 }
 
 struct HookTarget {
@@ -617,7 +1024,8 @@ bool InstallRouteHooks()
         }
         return false;
     }
-    LOG("Route: whole-line hooks installed (%d Yamanote packages known)", kPackageCount);
+    LOG("Route: whole-line hooks installed (%d YMTc packages, %d old YMT packages, load %s)", kPackageCount,
+        kOldPackageCount, g_loadLabel);
     return true;
 }
 
