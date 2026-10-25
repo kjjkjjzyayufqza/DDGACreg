@@ -13,28 +13,28 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Reject machine-local paths
-        shell: pwsh
+        shell: bash
         run: |
-          $needles = @(
-            ('C:\' + 'Users'),
-            ('C:/' + 'Users'),
-            ('/Use' + 'rs/'),
-            ('/ho' + 'me/'),
-            ('App' + 'Data'),
-            ('(2019) ' + '(Japan)')
-          )
-          $pattern = ($needles -join '|')
-          # git grep exits 1 when nothing matches. PowerShell 7 on the runner
-          # otherwise turns that into a failed step before this script can read it.
-          $PSNativeCommandUseErrorActionPreference = $false
-          git grep -n -I -E $pattern -- . ':(exclude)third_party' ':(exclude)server/third_party'
-          $code = $LASTEXITCODE
-          if ($code -eq 0) {
-            throw 'Tracked files contain a machine-local path.'
-          }
-          if ($code -ne 1) {
-            throw "git grep failed while scanning for machine-local paths (exit $code)."
-          }
+          set +e
+          pattern="$(printf '%s%s|%s%s|%s%s|%s%s|%s%s|%s%s' \
+            'C:\' 'Users' \
+            'C:/' 'Users' \
+            '/Use' 'rs/' \
+            '/ho' 'me/' \
+            'App' 'Data' \
+            '\(2019\) ' '\(Japan\)')"
+          git grep -n -I -E "$pattern" -- . ':(exclude)third_party' ':(exclude)server/third_party'
+          code=$?
+          set -e
+          echo "path scan exit ${code}"
+          if [ "$code" -eq 0 ]; then
+            echo 'Tracked files contain a machine-local path.'
+            exit 1
+          fi
+          if [ "$code" -ne 1 ]; then
+            echo "git grep failed (exit ${code})."
+            exit 1
+          fi
 
       - name: Configure
         run: cmake -S . -B build -A x64
