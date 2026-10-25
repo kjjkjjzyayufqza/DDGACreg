@@ -8,6 +8,8 @@ on:
 jobs:
   windows:
     runs-on: windows-2022
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,12 +44,52 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --target ddgac ddgac-content
 
-      - name: Upload binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: ddgac-release
-          path: |
-            build/dll/Release/version.dll
-            build/server/Release/ddgac-content.exe
-            config.ini
-          if-no-files-found: error
+      - name: Pack the release zip
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'DDGACreg'
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage 'server') | Out-Null
+          Copy-Item build/dll/Release/version.dll (Join-Path $stage 'version.dll')
+          Copy-Item build/server/Release/ddgac-content.exe (Join-Path $stage 'server/ddgac-content.exe')
+          Copy-Item README.md (Join-Path $stage 'README.md')
+          Copy-Item config.ini (Join-Path $stage 'config.ini')
+          $zip = Join-Path $env:GITHUB_WORKSPACE 'DDGACreg-windows.zip'
+          if (Test-Path $zip) { Remove-Item $zip }
+          tar -a -c -f $zip -C $stage version.dll config.ini README.md server
+          $names = @(tar -tf $zip | ForEach-Object { $_.Replace('\','/').Trim() } | Where-Object { $_ -ne '' })
+          $allowed = @('version.dll', 'config.ini', 'README.md', 'server/', 'server/ddgac-content.exe')
+          $required = @('version.dll', 'config.ini', 'README.md', 'server/ddgac-content.exe')
+          $unexpected = @($names | Where-Object { $_ -notin $allowed })
+          $missing = @($required | Where-Object { $_ -notin $names })
+          Write-Output $names
+          if ($unexpected.Count -gt 0 -or $missing.Count -gt 0) {
+            throw "Release zip entries are wrong. unexpected=[$($unexpected -join ', ')] missing=[$($missing -join ', ')]"
+          }
+
+      - name: Publish the GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=$(cat <<'EOF'
+          Unofficial hobby build for a local TG4AC 5.80.02 copy. Not affiliated with Densha de Go!! arcade machines, their operators, or the game's developers.
+
+          DDGACreg-windows.zip contains version.dll, config.ini, README.md, and server/ddgac-content.exe.
+          EOF
+          )
+          set +e
+          gh release view latest --repo "$GITHUB_REPOSITORY"
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            gh release create latest DDGACreg-windows.zip \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "DDGACreg" \
+              --latest \
+              --notes "$notes"
+          else
+            gh release upload latest DDGACreg-windows.zip --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit latest --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest --notes "$notes"
+          fi

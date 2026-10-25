@@ -3,7 +3,7 @@
 [![Build](https://github.com/kjjkjjzyayufqza/DDGACreg/actions/workflows/build.yml/badge.svg)](https://github.com/kjjkjjzyayufqza/DDGACreg/actions/workflows/build.yml)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?style=flat&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/kjjkjj)
 
-DDGACreg is a hook for Densha de Go!! AC (TG4AC 5.80.02). It loads as `version.dll` next to the game.
+DDGACreg is an unofficial hobby hook for a local copy of TG4AC 5.80.02. It loads as `version.dll` next to the game. It is not affiliated with, endorsed by, or connected to Densha de Go!! arcade machines, their operators, or the game's developers.
 
 <a href="https://buymeacoffee.com/kjjkjj"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="40"></a>
 
@@ -22,7 +22,27 @@ The ultrawide display port is from [DDGUltrawide](https://github.com/percentcer/
 | `config.ini` | Settings copied next to the game. The content server reads the same file |
 | `third_party/minhook/` | Vendored MinHook |
 | `build.bat` | Builds `version.dll` and, when a game folder is given, copies it there |
-| `.github/workflows/build.yml` | Windows CI: configure, build Release, upload the DLL and server |
+| `.github/workflows/build.yml` | Windows CI: build Release and publish `DDGACreg-windows.zip` on the GitHub Release |
+
+## Download
+
+Each push to `main` publishes [DDGACreg-windows.zip](https://github.com/kjjkjjzyayufqza/DDGACreg/releases/latest/download/DDGACreg-windows.zip) on the GitHub Release. The zip contains only:
+
+| Path | Role |
+| --- | --- |
+| `version.dll` | Copy next to `TG4AC-Win64-Shipping.exe` |
+| `config.ini` | Same folder as the DLL. `server\ddgac-content.exe` reads it by walking up from its own folder |
+| `server\ddgac-content.exe` | Local content server. Start it before the game and leave the window open |
+| `README.md` | This file |
+
+The zip has no object files, debug symbols, or source tree.
+
+1. Unzip the archive.
+2. Copy `version.dll` and `config.ini` into `TG4AC\Binaries\Win64`. Do not replace the game executable.
+3. From the unzipped folder, run `server\ddgac-content.exe`.
+4. Start `TG4AC-Win64-Shipping.exe`.
+
+Remove `version.dll` to uninstall.
 
 ## Run locally
 
@@ -44,7 +64,7 @@ Outputs:
 - `build\dll\Release\version.dll`
 - `build\server\Release\ddgac-content.exe`
 
-GitHub Actions runs the same Release build on `windows-2022` and uploads those two binaries plus `config.ini` as the `ddgac-release` artifact.
+GitHub Actions runs the same Release build on `windows-2022` and publishes those two programs, `config.ini`, and this README as `DDGACreg-windows.zip`.
 
 ### 2. Install the hook
 
