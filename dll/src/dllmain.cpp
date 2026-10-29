@@ -32,5 +32,6 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
     features::Quality_Install(path);
     features::Route_Install(path);
     features::Stream_Install(path);
+    features::Mission_Install(path);
     return TRUE;
 }

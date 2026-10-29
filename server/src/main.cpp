@@ -12,6 +12,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -49,6 +50,8 @@ struct Fields {
     int serviceCredit = 0;
     bool hasService = false;
     int missionId = 0;
+    int trainLine = 0;
+    bool hasTrainLine = false;
     int difficulty = 0;
     int offset = 0;
     int count = 0;
@@ -262,6 +265,9 @@ void ApplyField(Fields& fields, const std::string& key, const JsonField& value)
         fields.serviceCredit = static_cast<int>(value.number);
     } else if (key == "mission_id") {
         fields.missionId = JsonInt(value, 0);
+    } else if (key == "train_line") {
+        fields.hasTrainLine = true;
+        fields.trainLine = JsonInt(value, 0);
     } else if (key == "difficulty") {
         fields.difficulty = JsonInt(value, 0);
     } else if (key == "offset") {
@@ -301,7 +307,7 @@ Fields ParseFields(const std::string& body)
     JsonSkipWs(body, i);
     if (i < body.size() && body[i] == '{') {
         const char* keys[] = {
-            "player_id", "credit_num", "service_credit_num", "mission_id", "difficulty",
+            "player_id", "credit_num", "service_credit_num", "mission_id", "train_line", "difficulty",
             "offset", "count", "lineup_id", "num", "item_category", "web_point", "wappen_reset",
             "change_customize", "card", "card_code", "cardid", "card_id", "raw", "access_code", "nesica_id"
         };
@@ -675,14 +681,6 @@ bool IsRawCommand(const std::string& command)
         || command == "discontinuation";
 }
 
-// mission (CardUpdateType 21) would replace the game's mission tables
-// (ApplyMissionData, sub_1401C6C60); this server has no mission catalog, so
-// the game keeps the missions built into it.
-bool IsDeclinedCommand(const std::string& command)
-{
-    return command == "mission";
-}
-
 const char* kRunRank =
     "{\"StopPoint\":\"A\",\"ArrivalTime\":\"A\",\"SafetyOperation\":\"A\","
     "\"SpeedRegulation\":\"A\",\"TechnicalSkill\":\"A\",\"Total\":\"A\"}";
@@ -747,6 +745,13 @@ std::string Dispatch(ContentDb& db, const std::string& command, const Fields& fi
             }
         }
         return PlayerJson(db, db.PlayerById(fields.playerId), true);
+    }
+    if (command == "mission") {
+        // sub_14022E120 / ApplyMissionData (sub_1401C6C60) replace a line's
+        // rows. A result other than 1 keeps the missions built into the game.
+        // The catalog body only carried mission_value, so the replace cleared
+        // the strings the line screen needs and Yamanote returned empty.
+        throw std::invalid_argument("mission stays on the built-in catalog");
     }
     if (command == "machineunlock") {
         // CardUpdateType 40 (machine_unlock). The game marks the cabinet
@@ -1006,16 +1011,15 @@ int Serve(ContentDb& db, int port, const ServerOptions& options)
         const std::string command = CommandFromPath(pathOnly);
         // The game reads the first body line as the result code (1 is success,
         // sub_140239800) and parses the JSON after it.
-        if (IsDeclinedCommand(command)) {
-            Reply(client, 200, "OK", kDeclinedResultLine + "{\"result\":0}");
-            std::cout << method << " " << pathOnly << " 200 (no data, result 0)\n" << std::flush;
-            closesocket(client);
-            continue;
-        }
         Fields fields = ParseFields(body);
         ResolveCardPlayer(db, fields);
-        Reply(client, 200, "OK", kResultLine + Dispatch(db, command, fields, options));
-        std::cout << method << " " << pathOnly << " 200\n" << std::flush;
+        try {
+            Reply(client, 200, "OK", kResultLine + Dispatch(db, command, fields, options));
+            std::cout << method << " " << pathOnly << " 200\n" << std::flush;
+        } catch (const std::exception& error) {
+            Reply(client, 200, "OK", kDeclinedResultLine + "{\"result\":0}");
+            std::cerr << method << " " << pathOnly << " rejected: " << error.what() << "\n" << std::flush;
+        }
         closesocket(client);
     }
     return 0;

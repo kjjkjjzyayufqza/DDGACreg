@@ -8,6 +8,7 @@ target_sources(ddgac PRIVATE ${DDGAC_CPP})
 
 target_include_directories(ddgac PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../server/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/minhook/include")
 
 target_link_libraries(ddgac PRIVATE minhook)

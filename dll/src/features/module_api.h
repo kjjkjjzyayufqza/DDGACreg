@@ -35,4 +35,9 @@ void Route_Install(const wchar_t* moduleDir);
 // [Stream] Lift arcade loading and streaming budgets.
 void Stream_Install(const wchar_t* moduleDir);
 
+// [Mission] Normal mode lists the table at mission+360. ApplyMissionData
+// copies an incoming table over it; an empty incoming table is not copied.
+// A catalog id is also released when the map at +200 misses.
+void Mission_Install(const wchar_t* moduleDir);
+
 }
